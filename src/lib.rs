@@ -35,24 +35,27 @@ mod tests {
                     Op::Insert { key, value } => prop_assert_eq!(
                         hamt.insert(key, value),
                         hashmap.insert(key, value),
-                        "insert failed key={key}, value={value}, state={hashmap:?}",
+                        "insert failed key={key}, value={value}, desired={hashmap:#?}, actual={hamt:#?}",
                         key = key,
                         value = value,
-                        hashmap = hashmap
+                        hashmap = hashmap,
+                        hamt = hamt,
                     ),
                     Op::Get { key } => prop_assert_eq!(
                         hamt.get(&key),
                         hashmap.get(&key),
-                        "get failed key={key}, state={hashmap:?}",
+                        "get failed key={key}, desired={hashmap:#?}, actual={hamt:#?}",
                         key = key,
-                        hashmap = hashmap
+                        hashmap = hashmap,
+                        hamt = hamt,
                     ),
                     Op::Remove { key } => prop_assert_eq!(
                         hamt.remove(&key),
                         hashmap.remove(&key),
-                        "remove failed key={key}, state={hashmap:?}",
+                        "remove failed key={key}, desired={hashmap:#?}, actual={hamt:#?}",
                         key = key,
-                        hashmap = hashmap
+                        hashmap = hashmap,
+                        hamt = hamt,
                     ),
                 }
             }

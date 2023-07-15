@@ -2,12 +2,13 @@ use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash};
-use std::mem;
 use std::ops::{Index, IndexMut};
 use std::rc::Rc;
+use std::{fmt, mem};
 
 use crate::hash_seq::HashSeq;
 
+#[derive(Debug)]
 pub struct Hamt<K, V, S = RandomState> {
     root: IntNode<K, V>,
     hash_builder: S,
@@ -61,8 +62,8 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let hash_seq = HashSeq::new(k, &self.hash_builder);
-        let result = self.root.search_mut(hash_seq);
+        let mut hash_seq = HashSeq::new(k, &self.hash_builder);
+        let result = self.root.search_mut(&mut hash_seq);
         match result.kind {
             SearchResultKind::Success => {
                 let Some(Node::Leaf(leaf)) = result.anchor.get_mut(result.index) else { unreachable!() };
@@ -75,8 +76,8 @@ where
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         let key = Rc::new(k);
         let hs_key = Rc::clone(&key);
-        let hash_seq = HashSeq::new(&*hs_key, &self.hash_builder);
-        let result = self.root.search_mut(hash_seq.clone());
+        let mut hash_seq = HashSeq::new(&*hs_key, &self.hash_builder);
+        let result = self.root.search_mut(&mut hash_seq);
         match result.kind {
             SearchResultKind::Success => {
                 let Some(Node::Leaf(leaf)) = result.anchor.get_mut(result.index) else { unreachable!() };
@@ -144,7 +145,6 @@ where
     }
 }
 
-#[derive(Debug)]
 struct IntNode<K, V> {
     bitmap: u64,
     children: Rc<[Node<K, V>]>,
@@ -189,10 +189,12 @@ impl<K, V> IntNode<K, V> {
         children.push(child);
         children.extend_from_slice(&self.children[n_before..]);
 
-        Self {
+        let res = Self {
             bitmap,
             children: children.into(),
-        }
+        };
+        debug_assert!(res.get(index).is_some());
+        res
     }
 
     fn make_table(
@@ -270,6 +272,15 @@ where
     }
 }
 
+impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for IntNode<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut s = f.debug_struct("IntNode");
+        s.field("bitmap", &format!("{:064b}", self.bitmap));
+        s.field("children", &self.children);
+        s.finish()
+    }
+}
+
 fn make_mut_unsized<T>(rc_t: &mut Rc<T>) -> &mut T
 where
     T: ?Sized + ToOwned,
@@ -312,7 +323,7 @@ where
 
     fn search_mut<'a, Q, S>(
         &'a mut self,
-        mut hash_seq: HashSeq<'_, Q, S>,
+        hash_seq: &mut HashSeq<'_, Q, S>,
     ) -> SearchMutResult<'a, K, V>
     where
         K: Borrow<Q>,
