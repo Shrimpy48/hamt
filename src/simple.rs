@@ -8,7 +8,6 @@ use std::{fmt, mem};
 
 use crate::hash_seq::HashSeq;
 
-#[derive(Debug)]
 pub struct Hamt<K, V, S = RandomState> {
     root: IntNode<K, V>,
     hash_builder: S,
@@ -29,6 +28,10 @@ impl<K, V, S> Hamt<K, V, S> {
             root: IntNode::new(),
             hash_builder,
         }
+    }
+
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        Iter::new(self)
     }
 }
 
@@ -142,6 +145,14 @@ where
 {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<K: fmt::Debug, V: fmt::Debug, S> fmt::Debug for Hamt<K, V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut map = f.debug_map();
+        map.entries(self.iter());
+        map.finish()
     }
 }
 
@@ -489,4 +500,56 @@ enum RemoveResult<K, V> {
     Success { key: K, value: V },
     Gathered { key: K, value: V },
     NotFound,
+}
+
+pub struct Iter<'a, K, V> {
+    stack: Vec<IterItem<'a, K, V>>,
+}
+
+struct IterItem<'a, K, V> {
+    node: &'a IntNode<K, V>,
+    child: usize,
+}
+
+impl<'a, K, V> IterItem<'a, K, V> {
+    fn new(node: &'a IntNode<K, V>) -> Self {
+        Self { node, child: 0 }
+    }
+}
+
+impl<'a, K, V> Iter<'a, K, V> {
+    fn new<S>(hamt: &'a Hamt<K, V, S>) -> Self {
+        Self {
+            stack: vec![IterItem::new(&hamt.root)],
+        }
+    }
+}
+
+impl<'a, K, V> Iterator for Iter<'a, K, V> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.stack.last_mut() {
+                Some(item) => match item.node.children.get(item.child) {
+                    Some(Node::Int(int)) => self.stack.push(IterItem::new(int)),
+                    Some(Node::Leaf(leaf)) => {
+                        let res = Some((&*leaf.key, &*leaf.value));
+                        item.child += 1;
+                        break res;
+                    }
+                    None => {
+                        self.stack.pop();
+                        match self.stack.last_mut() {
+                            Some(item) => item.child += 1,
+                            None => {}
+                        }
+                    }
+                },
+                None => {
+                    break None;
+                }
+            }
+        }
+    }
 }
