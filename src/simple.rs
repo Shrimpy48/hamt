@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use std::cmp::Ordering;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hash};
 use std::mem;
@@ -42,10 +43,9 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash_seq = HashSeq::new(k, &self.hash_builder);
-        match self.root.search(hash_seq) {
-            Some(leaf) => Some((&leaf.key, &leaf.value)),
-            _ => None,
-        }
+        self.root
+            .search(hash_seq)
+            .map(|leaf| (&*leaf.key, &*leaf.value))
     }
 
     pub fn get<Q>(&self, k: &Q) -> Option<&V>
@@ -117,16 +117,12 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash_seq = HashSeq::new(k, &self.hash_builder);
-        let result = self.root.search_mut(hash_seq);
-        match result.kind {
-            SearchResultKind::Success => {
-                let Some(Node::Leaf(leaf)) = result.anchor.get_mut(result.index) else { unreachable!() };
-                let entry = ((*leaf.key).clone(), (*leaf.value).clone());
-                *result.anchor = result.anchor.remove(result.index);
-                // TODO: gather
-                Some(entry)
+        let result = self.root.remove(hash_seq);
+        match result {
+            RemoveResult::Success { key, value } | RemoveResult::Gathered { key, value } => {
+                Some((key, value))
             }
-            _ => None,
+            RemoveResult::NotFound => None,
         }
     }
 
@@ -136,6 +132,15 @@ where
         Q: Hash + Eq + ?Sized,
     {
         self.remove_entry(k).map(|(_, v)| v)
+    }
+}
+
+impl<K, V, S> Default for Hamt<K, V, S>
+where
+    S: Default,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -192,27 +197,25 @@ impl<K, V> IntNode<K, V> {
         right_leaf: LeafNode<K, V>,
     ) -> Self {
         let Some((left_index, right_index)) = paired_seq.next() else { unreachable!() };
-        if left_index == right_index {
-            Self {
+        match left_index.cmp(&right_index) {
+            Ordering::Equal => Self {
                 bitmap: 1 << left_index,
                 children: Rc::new([Node::Int(Self::make_table(
                     paired_seq, left_leaf, right_leaf,
                 ))]),
-            }
-        } else if left_index < right_index {
-            Self {
+            },
+            Ordering::Less => Self {
                 bitmap: (1 << left_index) | (1 << right_index),
                 children: Rc::new([Node::Leaf(left_leaf), Node::Leaf(right_leaf)]),
-            }
-        } else {
-            Self {
+            },
+            Ordering::Greater => Self {
                 bitmap: (1 << left_index) | (1 << right_index),
                 children: Rc::new([Node::Leaf(right_leaf), Node::Leaf(left_leaf)]),
-            }
+            },
         }
     }
 
-    fn remove(&self, index: usize) -> Self {
+    fn remove_child(&self, index: usize) -> Self {
         let bitmap = self.bitmap & !(1 << index);
         let n_before = (self.bitmap & ((1 << index) - 1)).count_ones() as usize;
         let n_after = (self.bitmap & !((1 << (index + 1)) - 1)).count_ones() as usize;
@@ -225,12 +228,40 @@ impl<K, V> IntNode<K, V> {
             children: children.into(),
         }
     }
+}
 
-    fn gather(&self) -> Option<LeafNode<K, V>> {
-        if let [Node::Leaf(leaf)] = &*self.children {
-            Some(leaf.clone())
-        } else {
-            None
+impl<K, V> IntNode<K, V>
+where
+    K: Clone,
+    V: Clone,
+{
+    // Remove without gathering this node.
+    fn remove<Q, S>(&mut self, mut hash_seq: HashSeq<'_, Q, S>) -> RemoveResult<K, V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+        S: BuildHasher,
+    {
+        let Some(index) = hash_seq.next() else { unreachable!() };
+        match self.get_mut(index) {
+            None => RemoveResult::NotFound,
+            Some(Node::Leaf(leaf)) => {
+                if (*leaf.key).borrow() == hash_seq.key() {
+                    let key = (*leaf.key).clone();
+                    let value = (*leaf.value).clone();
+                    *self = self.remove_child(index);
+                    RemoveResult::Success { key, value }
+                } else {
+                    RemoveResult::NotFound
+                }
+            }
+            Some(node) => {
+                let res = node.gather_remove(hash_seq);
+                match res {
+                    RemoveResult::NotFound | RemoveResult::Success { .. } => res,
+                    RemoveResult::Gathered { key, value } => RemoveResult::Success { key, value },
+                }
+            }
         }
     }
 }
@@ -255,7 +286,7 @@ impl<K, V> IntNode<K, V>
 where
     K: Eq + Hash,
 {
-    fn search<'a, 'b, Q, S>(&'a self, mut hash_seq: HashSeq<'b, Q, S>) -> Option<&'a LeafNode<K, V>>
+    fn search<'a, Q, S>(&'a self, mut hash_seq: HashSeq<'_, Q, S>) -> Option<&'a LeafNode<K, V>>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -275,9 +306,9 @@ where
         }
     }
 
-    fn search_mut<'a, 'b, Q, S>(
+    fn search_mut<'a, Q, S>(
         &'a mut self,
-        mut hash_seq: HashSeq<'b, Q, S>,
+        mut hash_seq: HashSeq<'_, Q, S>,
     ) -> SearchMutResult<'a, K, V>
     where
         K: Borrow<Q>,
@@ -345,18 +376,70 @@ enum Node<K, V> {
     Leaf(LeafNode<K, V>),
 }
 
-impl<K, V> Node<K, V> {
-    fn gather(&mut self) -> bool {
+impl<K, V> Node<K, V>
+where
+    K: Clone,
+    V: Clone,
+{
+    fn gather_remove<Q, S>(&mut self, mut hash_seq: HashSeq<'_, Q, S>) -> RemoveResult<K, V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+        S: BuildHasher,
+    {
         match self {
-            Self::Int(int) => match int.gather() {
-                Some(leaf) => {
-                    *self = Self::Leaf(leaf);
-                    true
+            Self::Int(int) => {
+                let Some(index) = hash_seq.next() else { unreachable!() };
+                match int.get_mut(index) {
+                    None => RemoveResult::NotFound,
+                    Some(Node::Leaf(leaf)) => {
+                        if (*leaf.key).borrow() == hash_seq.key() {
+                            let key = (*leaf.key).clone();
+                            let value = (*leaf.value).clone();
+                            if int.bitmap.count_ones() == 2 {
+                                let other_index = (int.bitmap & !(1 << index)).ilog2() as usize;
+                                if let Node::Leaf(_) = int.get(other_index).unwrap() {
+                                    self.gather(other_index);
+                                    RemoveResult::Gathered { key, value }
+                                } else {
+                                    *int = int.remove_child(index);
+                                    RemoveResult::Success { key, value }
+                                }
+                            } else {
+                                *int = int.remove_child(index);
+                                RemoveResult::Success { key, value }
+                            }
+                        } else {
+                            RemoveResult::NotFound
+                        }
+                    }
+                    Some(node) => {
+                        let res = node.gather_remove(hash_seq);
+                        match res {
+                            RemoveResult::NotFound | RemoveResult::Success { .. } => res,
+                            RemoveResult::Gathered { key, value } => {
+                                let Node::Int(int) = node else { unreachable!() };
+                                if int.bitmap.count_ones() == 1 {
+                                    self.gather(index);
+                                    RemoveResult::Gathered { key, value }
+                                } else {
+                                    RemoveResult::Success { key, value }
+                                }
+                            }
+                        }
+                    }
                 }
-                None => false,
-            },
-            Self::Leaf(_) => false,
+            }
+            Self::Leaf(_) => unreachable!(),
         }
+    }
+}
+
+impl<K, V> Node<K, V> {
+    fn gather(&mut self, index: usize) {
+        let Self::Int(int) = self else { unreachable!() };
+        let Some(leaf@Self::Leaf(_)) = int.get(index) else { unreachable!() };
+        *self = leaf.clone()
     }
 }
 
@@ -381,4 +464,11 @@ struct SearchMutResult<'a, K, V> {
     kind: SearchResultKind,
     anchor: &'a mut IntNode<K, V>,
     index: usize,
+}
+
+#[derive(Debug)]
+enum RemoveResult<K, V> {
+    Success { key: K, value: V },
+    Gathered { key: K, value: V },
+    NotFound,
 }
