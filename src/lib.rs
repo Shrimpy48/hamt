@@ -17,6 +17,7 @@ mod tests {
 
     #[derive(Debug, Arbitrary)]
     enum Op<K, V> {
+        Len,
         Get { key: K },
         Insert { key: K, value: V },
         Remove { key: K },
@@ -62,6 +63,11 @@ mod tests {
                     ),
                     Op::Iter => prop_assert_eq!(hamt.iter().collect::<HashSet<_>>(), hashmap.iter().collect::<HashSet<_>>(),
                         "iter failed desired={hashmap:#?}, actual={hamt:#?}",
+                        hashmap = hashmap,
+                        hamt = hamt,
+                    ),
+                    Op::Len => prop_assert_eq!(hamt.len(), hashmap.len(),
+                        "len failed desired={hashmap:#?}, actual={hamt:#?}",
                         hashmap = hashmap,
                         hamt = hamt,
                     ),
