@@ -223,16 +223,19 @@ impl<K, V> IntNode<K, V> {
 
     fn remove_child(&self, index: usize) -> Self {
         let bitmap = self.bitmap & !(1 << index);
+        debug_assert_ne!(bitmap, self.bitmap, "Node should have child at this index");
+        let new_num_children = bitmap.count_ones() as usize;
         let n_before = (self.bitmap & ((1 << index) - 1)).count_ones() as usize;
-        let n_after = (self.bitmap & !((1 << (index + 1)) - 1)).count_ones() as usize;
-        let mut children = Vec::with_capacity(bitmap.count_ones() as usize);
+        let mut children = Vec::with_capacity(new_num_children);
         children.extend_from_slice(&self.children[..n_before]);
-        children.extend_from_slice(&self.children[self.children.len() - n_after..]);
+        children.extend_from_slice(&self.children[n_before + 1..]);
 
-        Self {
+        let res = Self {
             bitmap,
             children: children.into(),
-        }
+        };
+        debug_assert!(res.get(index).is_none());
+        res
     }
 }
 
