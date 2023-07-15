@@ -46,6 +46,11 @@ impl<K, V, S> Hamt<K, V, S> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    pub fn clear(&mut self) {
+        self.root = IntNode::new();
+        self.size = 0;
+    }
 }
 
 impl<K, V, S> Hamt<K, V, S>
@@ -70,6 +75,14 @@ where
         Q: Hash + Eq + ?Sized,
     {
         self.get_key_value(k).map(|(_, v)| v)
+    }
+
+    pub fn contains_key<Q>(&self, k: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get_key_value(k).is_some()
     }
 }
 
