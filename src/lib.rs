@@ -6,7 +6,7 @@ pub use simple::Hamt;
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{hash_map::DefaultHasher, HashMap},
+        collections::{hash_map::DefaultHasher, HashMap, HashSet},
         hash::BuildHasherDefault,
     };
 
@@ -20,20 +20,21 @@ mod tests {
         Get { key: K },
         Insert { key: K, value: V },
         Remove { key: K },
+        Iter,
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(10_000))]
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
 
-        #[test]
-        fn matches_hashmap(ops in prop::collection::vec(any::<Op<u8, u8>>(), prop::collection::SizeRange::default())
-        ) {
-            // Use a consistent seed so shrinking works.
-            let mut hamt: Hamt<u8, u8, BuildHasherDefault<DefaultHasher>> = Hamt::default();
-            let mut hashmap: HashMap<u8, u8, BuildHasherDefault<DefaultHasher>> = HashMap::default();
+    #[test]
+    fn matches_hashmap(ops in prop::collection::vec(any::<Op<u8, u8>>(), prop::collection::SizeRange::default())
+    ) {
+        // Use a consistent seed so shrinking works.
+        let mut hamt: Hamt<u8, u8, BuildHasherDefault<DefaultHasher>> = Hamt::default();
+        let mut hashmap: HashMap<u8, u8, BuildHasherDefault<DefaultHasher>> = HashMap::default();
 
-            for op in ops {
-                match op {
+        for op in ops {
+            match op {
                     Op::Insert { key, value } => prop_assert_eq!(
                         hamt.insert(key, value),
                         hashmap.insert(key, value),
@@ -59,8 +60,13 @@ mod tests {
                         hashmap = hashmap,
                         hamt = hamt,
                     ),
+                    Op::Iter => prop_assert_eq!(hamt.iter().collect::<HashSet<_>>(), hashmap.iter().collect::<HashSet<_>>(),
+                        "iter failed desired={hashmap:#?}, actual={hamt:#?}",
+                        hashmap = hashmap,
+                        hamt = hamt,
+                    ),
                 }
-            }
         }
+    }
     }
 }
