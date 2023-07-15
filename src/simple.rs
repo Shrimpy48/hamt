@@ -436,7 +436,7 @@ where
                         match res {
                             RemoveResult::NotFound | RemoveResult::Success { .. } => res,
                             RemoveResult::Gathered { key, value } => {
-                                let Node::Int(int) = node else { unreachable!() };
+                                let Node::Int(int) = self else { unreachable!() };
                                 if int.bitmap.count_ones() == 1 {
                                     self.gather(index);
                                     RemoveResult::Gathered { key, value }
