@@ -178,12 +178,16 @@ impl<K, V> IntNode<K, V> {
 
     fn insert(&self, index: usize, child: Node<K, V>) -> Self {
         let bitmap = self.bitmap | (1 << index);
+        debug_assert_ne!(
+            bitmap, self.bitmap,
+            "Node should not already have child at this index"
+        );
+        let new_num_children = bitmap.count_ones() as usize;
         let n_before = (self.bitmap & ((1 << index) - 1)).count_ones() as usize;
-        let n_after = (self.bitmap & !((1 << (index + 1)) - 1)).count_ones() as usize;
-        let mut children = Vec::with_capacity(bitmap.count_ones() as usize);
+        let mut children = Vec::with_capacity(new_num_children);
         children.extend_from_slice(&self.children[..n_before]);
         children.push(child);
-        children.extend_from_slice(&self.children[self.children.len() - n_after..]);
+        children.extend_from_slice(&self.children[n_before..]);
 
         Self {
             bitmap,
